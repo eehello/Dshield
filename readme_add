@@ -1,0 +1,139 @@
+http://bbs.linuxtone.org/thread-31830-1-1.html
+
+记得很久之前写过一个工具轻量的DDos防御工具叫“DDoS-Defender”，也在论坛里分享过，同学们好像也比较有兴趣。最近整理硬盘的时候，无意中又看到了它。所以突发其想，想重新玩一下。
+
+起因是这样的，最近看到了一个比较有趣的《collectd+influxDB+grafana》的开源监控框架。
+collectd负责收集系统数据，然后传送给influxDB，influxDB是一个时序式数据库，而且支持Restful接口、伪SQL语法，轻量易用。
+grafana主要是个图形框架，内置http服务器，可以定制各种自已喜欢的图形和表格，功能强大好玩。
+
+至于监控，我是不太感兴趣了，我反而觉得如果把之前写的DDos工具，进行web可视化，这绝对高逼格啊~~ 所以我真的把代码重写了~~ 然后我给它起了个全新的名字：“Dshield”。
+
+#简介：
+
+Dshield是一个轻量型的DDos防护工具，它在受到如CC、压测工具等拒绝服务攻击时，能进行比较有效的防御。
+实际上它并不具备阻截能力，它是基于IPtables防火墙，利用类似于SS命令过滤出可疑IP，与IPtables防火墙实现联动。
+在发生恶意拒绝服务攻击时，本工具会实时分析连接来源的企图，并自动将其加入iptables防火墙的DROP链表中进行阻截。
+同时将攻击IP记录数据库中，当达到预定时间后，工具自动从IPtables防火墙中解封对应IP。在基本测试过程中，应付单IP并发连接攻击、cc攻击等效果明显。
+但它并不适合于真正的大流量攻击，只要攻击流量不超过服务器的最高带宽一般不会造成服务宕机，能对抗轻量DDOS。工具完全由python开发，程序简单易读，方便后期修改。
+工具新增了基于web可视化的图形界面,代码层基本上全部进行了重构。
+由于面向web可视化，所以底层架构上采用了influxDB + grafana的结合，你可以不需要安装任何额外的http服务来支持它的运行，因为grafana工具已集成了一套http服务，且图形是可自定义配置的。
+使用起来相当容易。保证你会喜欢上它！
+
+#程序结构
+
+Dshield/conf     配置文件
+Dshield/data     存放数据缓存
+Dshield/lib       功能模块实例
+Dshield/sbin     主程序
+Dshield/logs     日志输出记录
+Dshield/test     测试用例
+
+做了一些全新的优化：
+(1) 改为使用SS命令来分析连接状态，SS在效率上极优于netstat，高并发连接情况下速度快，不影响系统性能。
+(2) 增加TTL检测进程，对异常TTL进行封锁。TTL封锁可对随机IP并发连接攻击类有一定保护效果，只要封定成功能保证系统不会因为消耗资源而宕机，但是无法解决带宽被占满的问题。
+同时，TTL有可能会造成误杀情况，所以可酌情而开启。它与主进程是独立运作的，可以手工开启或关闭，又或者设为只监听状态。
+(3) 支持CRID的白名单书写规范，如 192.168.1.0/24。你再也不用一个个IP地填上去了。但是目前最多支持8组白名单。
+
+
+#安装方式
+
+使用root用户来进行安装。
+
+(1) 安装grafana
+
+    # yum -y install https://grafanarel.s3.amazonaws.com/builds/grafana-4.0.2-1481203731.x86_64.rpm
+    # service grafana-server start
+
+复制代码
+
+或者添加YUM源的方式，使用vi /etc/yum.repos.d/grafana.repo 将以下内容追加到文件里：
+
+    [grafana]
+    name=grafana
+    baseurl=https://packagecloud.io/grafana/stable/el/6/$basearch
+    repo_gpgcheck=1
+    enabled=1
+    gpgcheck=1
+    gpgkey=https://packagecloud.io/gpg.key https://grafanarel.s3.amazonaws.com/RPM-GPG-KEY-grafana
+    sslverify=1
+    sslcacert=/etc/pki/tls/certs/ca-bundle.crt
+
+复制代码
+
+然后执行YUM安装以及使用service命令启动
+
+    # yum install grafana
+    # service grafana-server start
+
+复制代码
+
+(2) 安装Dshield
+
+    wget https://github.com/ywjt/Dshield/archive/master.zip
+    unzip master.zip
+    cd Dshield-master/
+    sh install.sh
+
+复制代码
+
+安装完成，现在可以启动Dshield工具！
+
+    service grafana-server restart
+    /usr/local/Dshield/sbin/dshield all start
+
+复制代码
+
+打开 http://{your_ip}:3000/ 看看。用户名/密码：admin /admin
+
+#使用帮助
+
+(1) 命令使用
+
+    # /usr/local/Dshield/sbin/dshield all {start|stop|restart}    #启动全部服务
+    # /usr/local/Dshield/sbin/dshield cc {start|stop|restart}     #启动主进程
+    # /usr/local/Dshield/sbin/dshield sniff {start|stop|restart}  #启动ttl模块
+    # /usr/local/Dshield/sbin/inflctl {start|stop|restart}        #独立启动数据缓存
+
+复制代码
+
+(2) 修改配置文件
+打开 /usr/local/Dshield/conf/default.ini
+
+    #白名单列表
+    #支持CIRD格式
+    whitelisted_ips = "10.10.10.0/24,172.16.0.0/16"
+    whitel_ttl_ips = "10.10.10.0/24,172.16.0.0/16"
+
+    #监控接口
+    mont_interface = "eth0"
+
+    #监控端口
+    mont_port = "80,22"
+
+    #监听模式 false 表示主动防御 true 表示只作记录不会锁IP,ttl
+    mont_listen = false
+
+    #监控密度,单位为秒
+    rexec_time = 5
+
+    #锁定连接数,该项能确定监控的敏感度 建议：100
+    no_of_connections = 100
+
+    #ip封锁时间 支持1d/1h/1m格式
+    block_period_ip = "1m"
+
+    #监控协议 对TTL监控模块生效 tcp 模式 udp 模式 '' 表示所有协议
+    mont_protocol = "tcp"
+
+    #锁定连接数,该项能确定监控的敏感度
+    #建议：20000~100000
+    no_ttl_connections = 20000
+
+    #ttl封锁时间 支持1d/1h/1m格式
+    block_period_ttl = "1m"
+
+复制代码
+
+Enjoy!
+
+你可以拿 webbench、ab、siege、LoadRunner 来压测！ 也可以装个hping3 模拟随机IP来发动洪水（注意发包量，这个并不是真正意义的防火墙。“小玩怡情，大玩耍流氓！”）。
